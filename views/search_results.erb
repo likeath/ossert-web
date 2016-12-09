@@ -1,23 +1,22 @@
 <div class="page-index">
   <p class="page-index__description">
     Search for `<%= params[:name] %>`
-    <% if search_results.exact_match %>
+
+    <% if search_results.local_exact_match %>
       <p> Exact match: </p>
-      <a href="/<%= search_results.exact_match %>" target="_blank"> <%= search_results.exact_match %> </a>
+      <a href="/<%= search_results.local_exact_match %>" target="_blank"> <%= search_results.local_exact_match %> </a>
     <% end %>
 
-    <% if search_results.project_names.present? %>
+    <% if search_results.local_matches.any? %>
       <p> Found projects: </p>
       <ul>
-        <% search_results.project_names.each do |project_name| %>
+        <% search_results.local_matches.each do |project_name| %>
           <li><a href="/<%= project_name %>" target="_blank"> <%= project_name %> </a></li>
         <% end %>
       </ul>
-    <% else %>
-      <p> Nothing found </p>
     <% end %>
 
-    <% if search_results.suggestions.present? %>
+    <% if search_results.suggestions.any? %>
       <p> You may try suggest projects: </p>
       <ul>
         <% search_results.suggestions.each do |project_name| %>
@@ -26,8 +25,14 @@
       </ul>
     <% end %>
 
-    <% unless search_results.suggestion_match %>
-      <p> Still not found what you are looking for? You may <a href="/suggest/<%= params[:name] %>">suggest</a> it </p>
-    <% end %>
+    <p>
+      <% if !search_results.found_any? %>
+        Nothing found.
+        You may <a href="/suggest/<%= params[:name] %>">suggest</a> it </p>
+      <% elsif !search_results.exact_match_found? %>
+        Still not found what you are looking for?
+        You may <a href="/suggest/<%= params[:name] %>">suggest</a> it </p>
+      <% end %>
+    </p>
   </p>
 </div>

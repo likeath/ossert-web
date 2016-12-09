@@ -4,148 +4,91 @@ module Ossert
       module_function
 
       def by_name(name)
-        TotalSearchResults.new(
-          Searcher::Local.new(name),
-          Searcher::Rubygems.new(name)
-        )
+        Results.new(name)
       end
 
-      class TotalSearchResults
-        def initialize(local_searcher, suggestions_searcher)
-          @local_searcher = local_searcher
-          @suggestions_searcher = suggestions_searcher
+      class Results
+        LIMIT = 15
+        SUGGESTIONS_SEARCH_URL = 'https://rubygems.org/api/v1/search.json'
+
+        attr_reader :suggestions_results, :local_results
+
+        def initialize(project_name)
+          @project_name = project_name
+
+          @suggestions_results = fetch_suggestions_results
+          @local_results = fetch_local_results(
+            project_names(suggestions_results)
+          )
         end
 
         def found_any?
-          any_local_results? || any_suggestions_results?
+          local_results.any? || suggestions_results.any?
         end
 
-        def exact_match
-          local_results.exact_match_project_name
+        def exact_match_found?
+          local_exact_match || suggestion_exact_match
         end
 
-        def project_names
-          local_results.project_names - [exact_match]
+        def local_matches
+          project_names(local_results) - [local_exact_match]
         end
 
         def suggestions
-          suggestions_results.project_names - local_results.project_names
+          project_names(suggestions_results) - project_names(local_results)
         end
 
-        def suggestion_match
-          suggestions_results.exact_match_project_name
+        def local_exact_match
+          (find_local_match || {})[:name]
+        end
+
+        def suggestion_exact_match
+          (find_suggestions_match || {})[:name]
         end
 
         private
 
-        def local_results
-          @local_results ||= @local_searcher.search(suggestions_results.project_names)
+        def fetch_local_results(included_projects)
+          ::Project
+            .where('name % ?', @project_name)
+            .or(name: included_projects)
+            .select(
+              Sequel.lit('name'),
+              Sequel.lit("name <-> #{::Project.db.literal(@project_name)} AS distance"))
+            .order(:distance)
+            .limit(LIMIT)
+            .to_a
         end
 
-        def suggestions_results
-          @suggestions_results ||= @suggestions_searcher.search
-        end
+        def fetch_suggestions_results
+          response = Faraday.new
+            .get(SUGGESTIONS_SEARCH_URL, query: @project_name)
 
-        def any_local_results?
-          local_results.any?
-        end
-
-        def any_suggestions_results?
-          suggestions_results.any?
-        end
-      end
-
-      module Searcher
-        class Local
-          def initialize(project_name)
-            @project_name = project_name
+          if response.status == 200
+            JSON.parse(response.body, symbolize_names: true).take(LIMIT)
+          else
+            # TODO: log error
+            []
           end
+        rescue Faraday::Error
+          # TODO: log error
+          []
+        end
 
-          def search(suggestions_project_names = [])
-            projects = ::Project
-              .where('name % ?', @project_name)
-              .or(name: suggestions_project_names)
-              .select(
-                Sequel.lit('name'),
-                Sequel.lit("name <-> #{::Project.db.literal(@project_name)} as distance"))
-              .order(:distance)
-              .limit(Results::LIMIT)
-              .to_a
-
-            Results::Local.new(projects, @project_name)
+        def find_local_match
+          local_results.find do |project|
+            project[:distance].zero?
           end
         end
 
-        class Rubygems
-          API_URL = 'https://rubygems.org/api/v1/search.json'.freeze
-
-          def initialize(project_name)
-            @project_name = project_name
-          end
-
-          def search
-            response = Faraday.new.get(API_URL, query: @project_name)
-
-            if response.status == 200
-              Results::Rubygems.new(
-                JSON.parse(response.body, symbolize_names: true),
-                @project_name
-              )
-            else
-              Results::Blank.new
-            end
-          rescue Faraday::Error
-            Results::Blank.new
-          end
-        end
-      end
-
-      module Results
-        LIMIT = 15
-        class Base
-          def initialize(found_projects, project_name)
-            @found_projects = found_projects.take(LIMIT)
-            @project_name = project_name
-          end
-
-          def any?
-            !@found_projects.empty?
-          end
-
-          def project_names
-            @found_projects.map { |project| project[:name] }
-          end
-
-          def exact_match_project_name
-            exact_match && exact_match[:name]
+        def find_suggestions_match
+          suggestions_results.find do |project|
+            project[:name] == @project_name.downcase
           end
         end
 
-        class Local < Base
-          private
-
-          def exact_match
-            @exact_match ||= @found_projects.find do |project|
-              project[:distance].zero?
-            end
-          end
-        end
-
-        class Rubygems < Base
-          private
-
-          # TODO not so reliable
-          def exact_match
-            @exact_match ||= @found_projects.find do |project|
-              project[:name] == @project_name.downcase
-            end
-          end
-        end
-
-        class Blank < Base
-          def initialize(*)
-            @found_projects = []
-          end
+        def project_names(projects)
+          projects.map { |project| project[:name] }
         end
       end
     end
